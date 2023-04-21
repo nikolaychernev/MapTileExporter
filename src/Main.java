@@ -3,7 +3,9 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.URL;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -105,14 +107,10 @@ public class Main {
         int downloadedImagesCount = 0;
         int lastProgressPercentage = Integer.MIN_VALUE;
 
-        int row = 1;
-
         for (int x = leftMostX; x <= rightMostX; x++) {
-            int column = 1;
-
             for (int y = topMostY; y <= bottomMostY; y++) {
                 String url = urlTemplate.replaceAll("\\{x}", String.valueOf(x)).replaceAll("\\{y}", String.valueOf(y));
-                String fileName = String.format("%s\\%s_%s.png", folder, row, column);
+                String fileName = String.format("%s\\%s_%s.png", folder, x, y);
 
                 //TODO wrap in try catch and if not found error is returned try with 1 zoom level less until you find an image or the zoom level gets to 0
                 //TODO dynamically change the X and Y based on the zoom level
@@ -127,11 +125,7 @@ public class Main {
                     int randomTimeout = RANDOM.nextInt();
                     Thread.sleep(randomTimeout);
                 }
-
-                column++;
             }
-
-            row++;
         }
     }
 
@@ -184,7 +178,18 @@ public class Main {
             return;
         }
 
-        BufferedImage mergedImage = createEmptyMergedImage(files);
+        Map<Boundary, Integer> boundaries = getBoundaries(files);
+
+        int smallestX = boundaries.get(Boundary.SMALLEST_X);
+        int biggestX = boundaries.get(Boundary.BIGGEST_X);
+
+        int smallestY = boundaries.get(Boundary.SMALLEST_Y);
+        int biggestY = boundaries.get(Boundary.BIGGEST_Y);
+
+        int width = (biggestX - smallestX + 1) * 256;
+        int height = (biggestY - smallestY + 1) * 256;
+
+        BufferedImage mergedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         Graphics2D graphics = mergedImage.createGraphics();
 
         int traversedFilesCount = 0;
@@ -200,8 +205,8 @@ public class Main {
                 continue;
             }
 
-            int x = Integer.parseInt(matcher.group(1));
-            int y = Integer.parseInt(matcher.group(2));
+            int x = Integer.parseInt(matcher.group(1)) - smallestX;
+            int y = Integer.parseInt(matcher.group(2)) - smallestY;
 
             graphics.drawImage(ImageIO.read(file), x * 256, y * 256, null);
         }
@@ -210,8 +215,11 @@ public class Main {
         ImageIO.write(mergedImage, "png", new File(fileName));
     }
 
-    private static BufferedImage createEmptyMergedImage(File[] files) {
+    private static Map<Boundary, Integer> getBoundaries(File[] files) {
+        int smallestX = Integer.MAX_VALUE;
         int biggestX = Integer.MIN_VALUE;
+
+        int smallestY = Integer.MAX_VALUE;
         int biggestY = Integer.MIN_VALUE;
 
         System.out.println("Calculating merged image size");
@@ -232,8 +240,16 @@ public class Main {
             int x = Integer.parseInt(matcher.group(1));
             int y = Integer.parseInt(matcher.group(2));
 
+            if (x < smallestX) {
+                smallestX = x;
+            }
+
             if (x > biggestX) {
                 biggestX = x;
+            }
+
+            if (y < smallestY) {
+                smallestY = y;
             }
 
             if (y > biggestY) {
@@ -241,10 +257,13 @@ public class Main {
             }
         }
 
-        int width = (biggestX + 1) * 256;
-        int height = (biggestY + 1) * 256;
+        Map<Boundary, Integer> boundaries = new HashMap<>();
+        boundaries.put(Boundary.SMALLEST_X, smallestX);
+        boundaries.put(Boundary.BIGGEST_X, biggestX);
+        boundaries.put(Boundary.SMALLEST_Y, smallestY);
+        boundaries.put(Boundary.BIGGEST_Y, biggestY);
 
-        return new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        return boundaries;
     }
 
     private static void deleteTemporaryImages(String folder) {
@@ -269,5 +288,9 @@ public class Main {
 
             file.delete();
         }
+    }
+
+    private enum Boundary {
+        SMALLEST_X, BIGGEST_X, SMALLEST_Y, BIGGEST_Y
     }
 }
