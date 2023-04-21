@@ -1,27 +1,44 @@
+import javax.imageio.ImageIO;
+import java.awt.*;
+import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.URL;
 import java.util.Locale;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Main {
 
     private static final BufferedReader READER = new BufferedReader(new InputStreamReader(System.in));
     private static final Random RANDOM = new Random();
+    private static final Pattern PATTERN = Pattern.compile("(\\d+)_(\\d+)\\.png");
+    private static final String MERGED_IMAGE_FILE_NAME = "merged.png";
 
     public static void main(String[] args) throws Exception {
+        System.out.println("Enter folder");
+        String folder = READER.readLine();
+
         System.out.println("Do you want to download images? Type y/n.");
         boolean download = parseBoolean(READER.readLine());
 
         if (download) {
-            downloadImages();
+            downloadImages(folder);
         }
 
         System.out.println("Do you want to merge images? Type y/n.");
         boolean merge = parseBoolean(READER.readLine());
 
         if (merge) {
-            mergeImages();
+            mergeImages(folder);
+        }
+
+        System.out.println("Do you want to delete the temporary images? Type y/n.");
+        boolean deleteTemporary = parseBoolean(READER.readLine());
+
+        if (deleteTemporary) {
+            deleteTemporaryImages(folder);
         }
     }
 
@@ -37,23 +54,20 @@ public class Main {
         }
     }
 
-    private static void downloadImages() throws Exception {
-        System.out.println("Enter left");
-        int left = Integer.parseInt(READER.readLine());
+    private static void downloadImages(String folder) throws Exception {
+        System.out.println("Enter left most X");
+        int leftMostX = Integer.parseInt(READER.readLine());
 
-        System.out.println("Enter right");
-        int right = Integer.parseInt(READER.readLine());
+        System.out.println("Enter right most X");
+        int rightMostX = Integer.parseInt(READER.readLine());
 
-        System.out.println("Enter top");
-        int top = Integer.parseInt(READER.readLine());
+        System.out.println("Enter top most Y");
+        int topMostY = Integer.parseInt(READER.readLine());
 
-        System.out.println("Enter bottom");
-        int bottom = Integer.parseInt(READER.readLine());
+        System.out.println("Enter bottom most Y");
+        int bottomMostY = Integer.parseInt(READER.readLine());
 
-        System.out.println("Enter folder");
-        String folder = READER.readLine();
-
-        int totalImagesCount = (Math.abs(left - right) + 1) * (Math.abs(top - bottom) + 1);
+        int totalImagesCount = (Math.abs(leftMostX - rightMostX) + 1) * (Math.abs(topMostY - bottomMostY) + 1);
         int downloadTimeoutMillisUpper;
         int downloadTimeoutMillisLower;
 
@@ -91,16 +105,33 @@ public class Main {
         int downloadedImagesCount = 0;
         int lastProgressPercentage = Integer.MIN_VALUE;
 
-        for (int x = left; x <= right; x++) {
-            for (int y = top; y <= bottom; y++) {
-                downloadImage(urlTemplate, x, y, folder);
+        int row = 1;
+
+        for (int x = leftMostX; x <= rightMostX; x++) {
+            int column = 1;
+
+            for (int y = topMostY; y <= bottomMostY; y++) {
+                String url = urlTemplate.replaceAll("\\{x}", String.valueOf(x)).replaceAll("\\{y}", String.valueOf(y));
+                String fileName = String.format("%s\\%s_%s.png", folder, row, column);
+
+                //TODO wrap in try catch and if not found error is returned try with 1 zoom level less until you find an image or the zoom level gets to 0
+                //TODO dynamically change the X and Y based on the zoom level
+                downloadImage(url, fileName);
+
                 downloadedImagesCount++;
+                lastProgressPercentage = printProgressMessage(downloadedImagesCount, totalImagesCount, lastProgressPercentage, "Downloading");
 
-                lastProgressPercentage = printProgressMessage(downloadedImagesCount, totalImagesCount, lastProgressPercentage);
+                int bound = (downloadTimeoutMillisUpper - downloadTimeoutMillisLower) + downloadTimeoutMillisLower;
 
-                int randomTimeout = RANDOM.nextInt((downloadTimeoutMillisUpper - downloadTimeoutMillisLower) + downloadTimeoutMillisLower);
-                Thread.sleep(randomTimeout);
+                if (bound > 0) {
+                    int randomTimeout = RANDOM.nextInt();
+                    Thread.sleep(randomTimeout);
+                }
+
+                column++;
             }
+
+            row++;
         }
     }
 
@@ -111,10 +142,7 @@ public class Main {
         );
     }
 
-    private static void downloadImage(String urlTemplate, int x, int y, String folder) {
-        String url = urlTemplate.replaceAll("\\{x}", String.valueOf(x)).replaceAll("\\{y}", String.valueOf(y));
-        String fileName = String.format("%s\\%s_%s.png", folder, x, y);
-
+    private static void downloadImage(String url, String fileName) {
         try (BufferedInputStream in = new BufferedInputStream(new URL(url).openStream());
              FileOutputStream fileOutputStream = new FileOutputStream(fileName)) {
 
@@ -124,12 +152,11 @@ public class Main {
             while ((bytesRead = in.read(dataBuffer, 0, 1024)) != -1) {
                 fileOutputStream.write(dataBuffer, 0, bytesRead);
             }
-        } catch (IOException e) {
-            e.printStackTrace();
+        } catch (IOException ignored) {
         }
     }
 
-    private static int printProgressMessage(int downloadedImagesCount, int totalImagesCount, int lastProgressPercentage) {
+    private static int printProgressMessage(int downloadedImagesCount, int totalImagesCount, int lastProgressPercentage, String text) {
         int currentProgressPercentage = (downloadedImagesCount * 100) / totalImagesCount;
 
         if (currentProgressPercentage > lastProgressPercentage) {
@@ -143,14 +170,104 @@ public class Main {
                 }
             }
 
-            System.out.printf("Downloading [%s][%s%%]\n", graphicalRepresentation, currentProgressPercentage);
+            System.out.printf("%s [%s][%s%%]\n", text, graphicalRepresentation, currentProgressPercentage);
             return currentProgressPercentage;
         }
 
         return lastProgressPercentage;
     }
 
-    private static void mergeImages() {
+    private static void mergeImages(String folder) throws IOException {
+        File[] files = new File(folder).listFiles();
 
+        if (files == null) {
+            return;
+        }
+
+        BufferedImage mergedImage = createEmptyMergedImage(files);
+        Graphics2D graphics = mergedImage.createGraphics();
+
+        int traversedFilesCount = 0;
+        int lastProgressPercentage = Integer.MIN_VALUE;
+
+        for (File file : files) {
+            traversedFilesCount++;
+            lastProgressPercentage = printProgressMessage(traversedFilesCount, files.length, lastProgressPercentage, "Merging");
+
+            Matcher matcher = PATTERN.matcher(file.getName());
+
+            if (!matcher.matches()) {
+                continue;
+            }
+
+            int x = Integer.parseInt(matcher.group(1));
+            int y = Integer.parseInt(matcher.group(2));
+
+            graphics.drawImage(ImageIO.read(file), x * 256, y * 256, null);
+        }
+
+        String fileName = String.format("%s\\%s", folder, MERGED_IMAGE_FILE_NAME);
+        ImageIO.write(mergedImage, "png", new File(fileName));
+    }
+
+    private static BufferedImage createEmptyMergedImage(File[] files) {
+        int biggestX = Integer.MIN_VALUE;
+        int biggestY = Integer.MIN_VALUE;
+
+        System.out.println("Calculating merged image size");
+
+        int traversedFilesCount = 0;
+        int lastProgressPercentage = Integer.MIN_VALUE;
+
+        for (File file : files) {
+            traversedFilesCount++;
+            lastProgressPercentage = printProgressMessage(traversedFilesCount, files.length, lastProgressPercentage, "Calculating");
+
+            Matcher matcher = PATTERN.matcher(file.getName());
+
+            if (!matcher.matches()) {
+                continue;
+            }
+
+            int x = Integer.parseInt(matcher.group(1));
+            int y = Integer.parseInt(matcher.group(2));
+
+            if (x > biggestX) {
+                biggestX = x;
+            }
+
+            if (y > biggestY) {
+                biggestY = y;
+            }
+        }
+
+        int width = (biggestX + 1) * 256;
+        int height = (biggestY + 1) * 256;
+
+        return new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+    }
+
+    private static void deleteTemporaryImages(String folder) {
+        File[] files = new File(folder).listFiles();
+
+        if (files == null) {
+            return;
+        }
+
+        System.out.println("Deleting temporary images");
+
+        int deletedImagesCount = 0;
+        int lastProgressPercentage = Integer.MIN_VALUE;
+
+        for (File file : files) {
+            deletedImagesCount++;
+            lastProgressPercentage = printProgressMessage(deletedImagesCount, files.length, lastProgressPercentage, "Deleting");
+
+            if (file.getName().equals(MERGED_IMAGE_FILE_NAME)) {
+                continue;
+            }
+
+            file.delete();
+        }
     }
 }
